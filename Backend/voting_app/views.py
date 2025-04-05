@@ -13,10 +13,9 @@ from .serializers import (
     DisputeSerializer
 )
 from .web3_utils import web3_manager
-from .zkp_prover import zkp_prover
 from django.utils import timezone
 
-# Dummy voter list (replace with actual wallet addresses)
+# Dummy voter list (replace with actual voter IDs from database)
 VOTERS = ["addr1", "addr2", "addr3", "addr4"]
 
 def get_merkle_proof(request):
@@ -93,24 +92,20 @@ class ElectionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Generate ZKP proof
-        try:
-            proof = zkp_prover.generate_vote_proof(
-                voter.voter_id,
-                request.data.get('vote_data', {})
-            )
-        except ValueError as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Generate Merkle proof
+        tree = MerkleTree(VOTERS)
+        proof = tree.get_proof(VOTERS.index(voter.voter_id))
         
         # Submit vote to blockchain
         try:
             tx_hash = web3_manager.submit_vote(
                 election.id,
                 request.data.get('vote_data', {}),
-                proof
+                {
+                    'merkle_root': tree.get_root(),
+                    'merkle_proof': proof,
+                    'voter_id': voter.voter_id
+                }
             )
         except Exception as e:
             return Response(
@@ -123,7 +118,10 @@ class ElectionViewSet(viewsets.ModelViewSet):
             election=election,
             voter=voter,
             vote_data=request.data.get('vote_data', {}),
-            zkp_proof=proof,
+            zkp_proof={
+                'merkle_root': tree.get_root(),
+                'merkle_proof': proof
+            },
             transaction_hash=tx_hash,
             is_verified=True
         )
