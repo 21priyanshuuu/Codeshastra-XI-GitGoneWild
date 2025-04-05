@@ -14,6 +14,7 @@ from .serializers import (
 )
 from .web3_utils import web3_manager
 from django.utils import timezone
+import base64
 
 # Dummy voter list (replace with actual voter IDs from database)
 VOTERS = ["addr1", "addr2", "addr3", "addr4"]
@@ -90,6 +91,30 @@ class ElectionViewSet(viewsets.ModelViewSet):
             return Response(
                 {"error": "Voter has already cast a vote"},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify facial data
+        facial_data = request.data.get('facial_data')
+        if not facial_data:
+            return Response(
+                {"error": "Facial verification data is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            # Decode base64 image data
+            image_data = base64.b64decode(facial_data)
+            
+            # Verify facial data
+            if not verify_face(voter.facial_data, image_data):
+                return Response(
+                    {"error": "Facial verification failed"},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+        except Exception as e:
+            return Response(
+                {"error": "Failed to verify facial data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
         # Generate Merkle proof
