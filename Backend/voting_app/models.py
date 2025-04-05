@@ -26,7 +26,8 @@ class Election(models.Model):
 class Voter(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     voter_id = models.CharField(max_length=100, unique=True)
-    is_verified = models.BooleanField(default=True)
+    is_verified = models.BooleanField(default=False)
+    facial_data = models.CharField(max_length=512, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

@@ -6,7 +6,7 @@ from .views import (
     ElectionViewSet,
     VoterViewSet
 )
-from .auth_views import signup, login
+from .auth_views import signup, login, verify_face_for_voting
 
 router = DefaultRouter()
 router.register(r'elections', ElectionViewSet, basename='election')
@@ -20,4 +20,5 @@ urlpatterns = [
     path('auth/signup/', signup, name='signup'),
     path('auth/login/', login, name='login'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('auth/verify-face/', verify_face_for_voting, name='verify_face'),
 ]
