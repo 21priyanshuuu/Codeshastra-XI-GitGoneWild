@@ -229,17 +229,10 @@ class ElectionViewSet(viewsets.ModelViewSet):
         election = self.get_object()
         dispute_id = request.data.get('dispute_id')
         resolution = request.data.get('resolution')
-        status = request.data.get('status')
         
-        if not dispute_id or not resolution or not status:
+        if not dispute_id or not resolution:
             return Response(
-                {"error": "Dispute ID, resolution, and status are required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        if status not in ['RESOLVED', 'REJECTED']:
-            return Response(
-                {"error": "Status must be either 'RESOLVED' or 'REJECTED'"},
+                {"error": "Dispute ID and resolution are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -250,12 +243,11 @@ class ElectionViewSet(viewsets.ModelViewSet):
             tx_hash = web3_manager.resolve_dispute(
                 election.id,
                 dispute.contract_dispute_id,
-                resolution,
-                status
+                resolution
             )
             
             # Update dispute status
-            dispute.status = status
+            dispute.status = 'resolved'
             dispute.resolution = resolution
             dispute.resolved_at = timezone.now()
             dispute.save()
