@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import authenticate
 from .models import Voter
 from .serializers import VoterSerializer
+from .web3_utils import web3_manager
 from .face_utils import encode_facial_data, verify_face
 import base64
 
@@ -17,26 +18,43 @@ User = get_user_model()
 def signup(request):
     username = request.data.get('username')
     password = request.data.get('password')
-    facial_data = request.data.get('facial_data')  # Base64 encoded image data
+    wallet_address = request.data.get('wallet_address')
+    facial_data_base64 = request.data.get('facial_data')
     
-    if not all([username, password, facial_data]):
+    # Validate required fields
+    if not all([username, password, wallet_address, facial_data_base64]):
         return Response(
-            {"error": "Username, password and facial data are required"},
+            {"error": "Username, password, wallet address and facial data are required"},
             status=status.HTTP_400_BAD_REQUEST
         )
     
+    # Check if username exists
     if User.objects.filter(username=username).exists():
         return Response(
             {"error": "Username already exists"},
             status=status.HTTP_400_BAD_REQUEST
         )
     
+    # Check if wallet address is already registered
+    if Voter.objects.filter(wallet_address=wallet_address).exists():
+        return Response(
+            {"error": "Wallet address already registered"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
     try:
-        # Decode base64 image data
-        image_data = base64.b64decode(facial_data)
-        
         # Process facial data
-        facial_hash, _ = encode_facial_data(image_data)
+        facial_data = base64.b64decode(facial_data_base64)
+        facial_hash, facial_bytes = encode_facial_data(facial_data)
+        
+        # Authenticate voter on blockchain
+        try:
+            tx_hash = web3_manager.authenticate_voter(wallet_address, facial_hash)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to authenticate voter on blockchain: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
         # Create user
         user = User.objects.create_user(
@@ -44,12 +62,15 @@ def signup(request):
             password=password
         )
         
-        # Create voter with facial data
+        # Create voter
         voter = Voter.objects.create(
             user=user,
             voter_id=f"VOTER_{user.id}",
-            facial_data=facial_hash,
-            is_verified=True  # Set to True after successful facial registration
+            wallet_address=wallet_address,
+            facial_data=facial_bytes,
+            facial_hash=facial_hash,
+            is_verified=True,
+            blockchain_tx=tx_hash
         )
         
         # Generate tokens
@@ -58,17 +79,24 @@ def signup(request):
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
-            'voter': VoterSerializer(voter).data
+            'voter': VoterSerializer(voter).data,
+            'tx_hash': tx_hash
         }, status=status.HTTP_201_CREATED)
         
     except ValueError as e:
+        # Clean up user if voter creation fails
+        if 'user' in locals():
+            user.delete()
         return Response(
             {"error": str(e)},
             status=status.HTTP_400_BAD_REQUEST
         )
     except Exception as e:
+        # Clean up user if voter creation fails
+        if 'user' in locals():
+            user.delete()
         return Response(
-            {"error": "Failed to process facial data"},
+            {"error": f"Failed to create voter: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -77,11 +105,10 @@ def signup(request):
 def login(request):
     username = request.data.get('username')
     password = request.data.get('password')
-    facial_data = request.data.get('facial_data')  # Base64 encoded image data
     
-    if not all([username, password, facial_data]):
+    if not username or not password:
         return Response(
-            {"error": "Username, password and facial data are required"},
+            {"error": "Username and password are required"},
             status=status.HTTP_400_BAD_REQUEST
         )
     
@@ -93,34 +120,23 @@ def login(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
+    # Get voter
     try:
-        # Get voter
         voter = Voter.objects.get(user=user)
-        
-        # Decode base64 image data
-        image_data = base64.b64decode(facial_data)
-        
-        # Verify facial data
-        if not verify_face(voter.facial_data, image_data):
-            return Response(
-                {"error": "Facial verification failed"},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        # Generate tokens
-        refresh = RefreshToken.for_user(user)
-        
-        return Response({
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
-            'voter': VoterSerializer(voter).data
-        })
-        
-    except Exception as e:
+    except Voter.DoesNotExist:
         return Response(
-            {"error": "Failed to verify facial data"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            {"error": "Voter record not found"},
+            status=status.HTTP_404_NOT_FOUND
         )
+    
+    # Generate tokens
+    refresh = RefreshToken.for_user(user)
+    
+    return Response({
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+        'voter': VoterSerializer(voter).data
+    })
 
 @api_view(['POST'])
 @permission_classes([AllowAny])

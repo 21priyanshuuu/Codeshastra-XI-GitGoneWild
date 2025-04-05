@@ -114,5 +114,74 @@ class Web3Manager:
         ).transact()
         return tx_hash.hex()
 
+    def resolve_dispute(self, election_id, dispute_id, resolution):
+        """
+        Resolve a dispute on the blockchain
+        """
+        voting_contract = self.get_contract('voting_core')
+        tx_hash = voting_contract.functions.resolveDispute(
+            election_id,
+            dispute_id,
+            resolution
+        ).transact()
+        return tx_hash
+
+    def get_election_results(self, election_id):
+        """
+        Get final election results from the blockchain
+        """
+        voting_contract = self.get_contract('voting_core')
+        results = voting_contract.functions.getElectionResults(election_id).call()
+        
+        # Format results into a more readable structure
+        formatted_results = {
+            'total_votes': results[0],
+            'vote_counts': results[1],
+            'winner': results[2] if len(results) > 2 else None
+        }
+        
+        return formatted_results
+
+    def get_end_time(self, election_id: int) -> int:
+        """
+        Get the end time of an election from the blockchain
+        """
+        voting_contract = self.get_contract('voting_core')
+        if not voting_contract:
+            print("Warning: Voting core contract not found")
+            return 0
+            
+        return voting_contract.functions.getEndTime(election_id).call()
+
+    def has_voted(self, election_id: int, voter_address: str) -> bool:
+        """
+        Check if a voter has already voted in an election
+        """
+        voting_contract = self.get_contract('voting_core')
+        if not voting_contract:
+            print("Warning: Voting core contract not found")
+            return False
+            
+        return voting_contract.functions.hasVoted(election_id, voter_address).call()
+
+    def get_election_status(self, election_id: int) -> str:
+        """
+        Get the current status of an election
+        Returns: 'pending', 'active', 'ended', or 'finalized'
+        """
+        voting_contract = self.get_contract('voting_core')
+        if not voting_contract:
+            print("Warning: Voting core contract not found")
+            return 'unknown'
+            
+        status_code = voting_contract.functions.getElectionStatus(election_id).call()
+        status_map = {
+            0: 'pending',
+            1: 'active',
+            2: 'ended',
+            3: 'finalized'
+        }
+        return status_map.get(status_code, 'unknown')
+
 # Initialize the Web3 manager
 web3_manager = Web3Manager() 

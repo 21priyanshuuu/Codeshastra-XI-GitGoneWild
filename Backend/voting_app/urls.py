@@ -7,6 +7,7 @@ from .views import (
     VoterViewSet
 )
 from .auth_views import signup, login, verify_face_for_voting
+from .merkle_views import update_merkle_root
 
 router = DefaultRouter()
 router.register(r'elections', ElectionViewSet, basename='election')
@@ -15,6 +16,7 @@ router.register(r'voters', VoterViewSet, basename='voter')
 urlpatterns = [
     path('', include(router.urls)),
     path('merkle-proof/', get_merkle_proof, name='merkle-proof'),
+    path('merkle/update/', update_merkle_root, name='update-merkle-root'),
     
     # Auth endpoints
     path('auth/signup/', signup, name='signup'),

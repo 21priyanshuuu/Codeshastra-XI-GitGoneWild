@@ -26,8 +26,11 @@ class Election(models.Model):
 class Voter(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     voter_id = models.CharField(max_length=100, unique=True)
-    is_verified = models.BooleanField(default=False)
-    facial_data = models.CharField(max_length=512, null=True, blank=True)
+    wallet_address = models.CharField(max_length=42, unique=True)  # Ethereum address
+    facial_data = models.BinaryField(null=True, blank=True)  # Store facial data as binary
+    facial_hash = models.CharField(max_length=64)  # SHA-256 hash of facial data
+    is_verified = models.BooleanField(default=True)
+    blockchain_tx = models.CharField(max_length=66, null=True, blank=True)  # Transaction hash
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -38,6 +41,7 @@ class Vote(models.Model):
     voter = models.ForeignKey(Voter, on_delete=models.CASCADE)
     vote_data = models.JSONField()
     zkp_proof = models.JSONField()
+    nullifier_hash = models.CharField(max_length=64, unique=True, null=True, blank=True)  # Made nullable initially
     transaction_hash = models.CharField(max_length=66)
     is_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

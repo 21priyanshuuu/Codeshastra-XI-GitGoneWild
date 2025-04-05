@@ -1,9 +1,10 @@
 django==5.0.2
 djangorestframework==3.14.0
+djangorestframework-simplejwt==5.3.1
 django-cors-headers==4.3.1
-web3==6.15.1
+web3==6.11.3
 python-dotenv==1.0.1
-eth-account==0.11.0
+eth-account==0.10.0
 eth-typing==4.0.0
 eth-utils==3.0.0
 numpy==1.26.4

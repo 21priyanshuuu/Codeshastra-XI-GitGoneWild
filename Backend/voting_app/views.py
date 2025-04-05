@@ -13,21 +13,36 @@ from .serializers import (
     DisputeSerializer
 )
 from .web3_utils import web3_manager
+from .face_utils import verify_face
 from django.utils import timezone
+from django.core.cache import cache
 import base64
 
-# Dummy voter list (replace with actual voter IDs from database)
-VOTERS = ["addr1", "addr2", "addr3", "addr4"]
+def get_voter_merkle_tree():
+    """Get or create Merkle tree from voter addresses"""
+    tree = cache.get('voter_merkle_tree')
+    if not tree:
+        # Get all verified voters' wallet addresses
+        voters = [v.wallet_address for v in Voter.objects.filter(is_verified=True)]
+        tree = MerkleTree(voters)
+        # Cache for 1 hour
+        cache.set('voter_merkle_tree', tree, 3600)
+    return tree
 
 def get_merkle_proof(request):
     voter_address = request.GET.get('address')
-    if voter_address not in VOTERS:
+    if not voter_address:
+        return JsonResponse({"error": "Address is required"}, status=400)
+
+    tree = get_voter_merkle_tree()
+    try:
+        # Get voter's index in the tree
+        voters = [v.wallet_address for v in Voter.objects.filter(is_verified=True)]
+        voter_index = voters.index(voter_address)
+        proof = tree.get_proof(voter_index)
+        return JsonResponse({"merkle_root": tree.get_root(), "proof": proof})
+    except ValueError:
         return JsonResponse({"error": "Address not found"}, status=400)
-
-    tree = MerkleTree(VOTERS)
-    proof = tree.get_proof(VOTERS.index(voter_address))
-
-    return JsonResponse({"merkle_root": tree.get_root(), "proof": proof})
 
 class IsAdminUser(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -93,43 +108,64 @@ class ElectionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Verify facial data
-        facial_data = request.data.get('facial_data')
-        if not facial_data:
+        # Get vote data and nullifier hash
+        vote_data = request.data.get('vote_data')
+        nullifier_hash = request.data.get('nullifier_hash')
+        
+        if not vote_data or not nullifier_hash:
             return Response(
-                {"error": "Facial verification data is required"},
+                {"error": "Vote data and nullifier hash are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-            
+        
+        # Check if nullifier has been used
+        if Vote.objects.filter(nullifier_hash=nullifier_hash).exists():
+            return Response(
+                {"error": "Vote nullifier has already been used"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get Merkle proof
+        tree = get_voter_merkle_tree()
+        voters = [v.wallet_address for v in Voter.objects.filter(is_verified=True)]
         try:
-            # Decode base64 image data
-            image_data = base64.b64decode(facial_data)
-            
-            # Verify facial data
-            if not verify_face(voter.facial_data, image_data):
+            voter_index = voters.index(voter.wallet_address)
+            merkle_proof = tree.get_proof(voter_index)
+        except ValueError:
+            return Response(
+                {"error": "Voter not found in Merkle tree"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify ZKP
+        try:
+            is_valid = web3_manager.verify_vote(
+                merkle_proof,
+                vote_data.get('signal'),
+                nullifier_hash,
+                tree.get_root()
+            )
+            if not is_valid:
                 return Response(
-                    {"error": "Facial verification failed"},
-                    status=status.HTTP_401_UNAUTHORIZED
+                    {"error": "ZKP verification failed"},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
         except Exception as e:
             return Response(
-                {"error": "Failed to verify facial data"},
+                {"error": f"Failed to verify ZKP: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-        # Generate Merkle proof
-        tree = MerkleTree(VOTERS)
-        proof = tree.get_proof(VOTERS.index(voter.voter_id))
         
         # Submit vote to blockchain
         try:
             tx_hash = web3_manager.submit_vote(
                 election.id,
-                request.data.get('vote_data', {}),
+                vote_data,
                 {
                     'merkle_root': tree.get_root(),
-                    'merkle_proof': proof,
-                    'voter_id': voter.voter_id
+                    'merkle_proof': merkle_proof,
+                    'nullifier_hash': nullifier_hash,
+                    'signal': vote_data.get('signal')
                 }
             )
         except Exception as e:
@@ -142,11 +178,14 @@ class ElectionViewSet(viewsets.ModelViewSet):
         vote = Vote.objects.create(
             election=election,
             voter=voter,
-            vote_data=request.data.get('vote_data', {}),
+            vote_data=vote_data,
             zkp_proof={
                 'merkle_root': tree.get_root(),
-                'merkle_proof': proof
+                'merkle_proof': merkle_proof,
+                'nullifier_hash': nullifier_hash,
+                'signal': vote_data.get('signal')
             },
+            nullifier_hash=nullifier_hash,
             transaction_hash=tx_hash,
             is_verified=True
         )
@@ -185,6 +224,119 @@ class ElectionViewSet(viewsets.ModelViewSet):
         
         return Response(DisputeSerializer(dispute).data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'])
+    def resolve_dispute(self, request, pk=None):
+        election = self.get_object()
+        dispute_id = request.data.get('dispute_id')
+        resolution = request.data.get('resolution')
+        status = request.data.get('status')
+        
+        if not dispute_id or not resolution or not status:
+            return Response(
+                {"error": "Dispute ID, resolution, and status are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        if status not in ['RESOLVED', 'REJECTED']:
+            return Response(
+                {"error": "Status must be either 'RESOLVED' or 'REJECTED'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        dispute = get_object_or_404(Dispute, id=dispute_id, election=election)
+        
+        # Submit resolution to blockchain
+        try:
+            tx_hash = web3_manager.resolve_dispute(
+                election.id,
+                dispute.contract_dispute_id,
+                resolution,
+                status
+            )
+            
+            # Update dispute status
+            dispute.status = status
+            dispute.resolution = resolution
+            dispute.resolved_at = timezone.now()
+            dispute.save()
+            
+            return Response(DisputeSerializer(dispute).data)
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to resolve dispute on blockchain: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['post'])
+    def finalize_election(self, request, pk=None):
+        election = self.get_object()
+        
+        if election.end_time > timezone.now():
+            return Response(
+                {"error": "Cannot finalize election before end time"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        if not election.is_active:
+            return Response(
+                {"error": "Election is already finalized"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get final results from blockchain
+        try:
+            results = web3_manager.get_election_results(election.id)
+            
+            # Create election result record
+            from .models import ElectionResult
+            result = ElectionResult.objects.create(
+                election=election,
+                results=results,
+                finalized_at=timezone.now()
+            )
+            
+            # Update election status
+            election.is_active = False
+            election.save()
+            
+            return Response({
+                "message": "Election finalized successfully",
+                "results": results
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to finalize election: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'])
+    def get_results(self, request, pk=None):
+        election = self.get_object()
+        
+        if election.is_active:
+            return Response(
+                {"error": "Cannot get results before election is finalized"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from .models import ElectionResult
+            result = get_object_or_404(ElectionResult, election=election)
+            
+            return Response({
+                "election": ElectionSerializer(election).data,
+                "results": result.results,
+                "finalized_at": result.finalized_at
+            })
+            
+        except ElectionResult.DoesNotExist:
+            return Response(
+                {"error": "Results not found for this election"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
 class VoterViewSet(viewsets.ModelViewSet):
     queryset = Voter.objects.all()
     serializer_class = VoterSerializer
@@ -195,4 +347,14 @@ class VoterViewSet(viewsets.ModelViewSet):
         if self.request.user.is_staff:
             return Voter.objects.all()
         return Voter.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        # Clear Merkle tree cache when new voter is added
+        cache.delete('voter_merkle_tree')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        # Clear Merkle tree cache when voter is updated
+        cache.delete('voter_merkle_tree')
+        serializer.save()
 
