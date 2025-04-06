@@ -48,10 +48,18 @@ class IsAdminUser(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user and request.user.is_staff
 
+class IsAdminOrReadOnly(permissions.BasePermission):
+    def has_permission(self, request, view):
+        # Allow read-only access for authenticated users
+        if request.method in permissions.SAFE_METHODS:
+            return request.user and request.user.is_authenticated
+        # Require admin for write operations
+        return request.user and request.user.is_staff
+
 class ElectionViewSet(viewsets.ModelViewSet):
     queryset = Election.objects.all()
     serializer_class = ElectionSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdminOrReadOnly]
 
     @action(detail=False, methods=['post'])
     def create_election(self, request):
@@ -336,17 +344,30 @@ class VoterViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         # Users can only see their own voter record
-        if self.request.user.is_staff:
-            return Voter.objects.all()
         return Voter.objects.filter(user=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def me(self, request):
+        voter = get_object_or_404(Voter, user=request.user)
+        serializer = self.get_serializer(voter)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         # Clear Merkle tree cache when new voter is added
         cache.delete('voter_merkle_tree')
-        serializer.save()
+        serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
         # Clear Merkle tree cache when voter is updated
         cache.delete('voter_merkle_tree')
         serializer.save()
+
+class VoteViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = VoteSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Users can only see their own votes
+        voter = get_object_or_404(Voter, user=self.request.user)
+        return Vote.objects.filter(voter=voter)
 
