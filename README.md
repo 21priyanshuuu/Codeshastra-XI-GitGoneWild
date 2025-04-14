@@ -1,6 +1,6 @@
 # 🗳️ Blockchain-Based Voting System
 
-A secure, transparent, and privacy-preserving voting platform built during [Hackathon Name] using cutting-edge technologies like **Zero-Knowledge Proofs**, **Geo-Fenced Voting**, **MFA**, and **Smart Contracts**. This system ensures vote integrity, privacy, and verifiability for modern democratic processes.
+A secure, transparent, and privacy-preserving voting platform built during Codeshastra using cutting-edge technologies like **Zero-Knowledge Proofs**, **Geo-Fenced Voting**, **MFA**, and **Smart Contracts**. This system ensures vote integrity, privacy, and verifiability for modern democratic processes.
 
 ## 🚀 Features
 
